@@ -1,12 +1,14 @@
-import os
 import json
-from collections import defaultdict
+import os
 import warnings
+from collections import defaultdict
 from pathlib import Path
+from random import random
+
 import matplotlib.pyplot as plt
 
 try:
-    from parametric_plasma_source import PlasmaSource, SOURCE_SAMPLING_PATH
+    from parametric_plasma_source import SOURCE_SAMPLING_PATH, PlasmaSource
 except BaseException:
     warnings.warn('parametric_plasma_source not found distributed plasma \
             sources are not avaialbe in Neutronics simulations', UserWarning)
@@ -41,6 +43,8 @@ class NeutronicsModelFromReactor():
             for the reactor can be obtained with Reactor().material_tags.
         cell_tallies: (list of strings): the cell based tallies to calculate,
             options include TBR, heat and flux
+        mesh_tallies_2D: (list of strings): the 2D mesh based tallies to
+            calculate, options include TBR, heat and flux
         fusion_power: (float): the power in watts emitted by the fusion
             reaction recalling that each DT fusion reaction emitts 17.6 MeV or
             2.819831e-12 Joules
@@ -78,50 +82,32 @@ class NeutronicsModelFromReactor():
         self,
         reactor,
         materials,
-        cell_tallies,
         fusion_power=1e9,
-        method='ppp',
+        method='trelis',
         simulation_batches=100,
         simulation_particles_per_batch=10000,
-        ion_density_peaking_factor=1,
-        ion_density_origin=1.09e20,
-        ion_density_pedestal=1.09e20,
-        ion_density_separatrix=3e19,
-        ion_temperature_origin=45.9,
-        ion_temperature_peaking_factor=8.06,
-        ion_temperature_pedestal=6.09,
-        ion_temperature_separatrix=0.1,
-        pedestal_radius_factor=0.8,
-        shafranov_shift=0.44789,
-        ion_temperature_beta=6,
         max_lost_particles=10,
         faceting_tolerance=1e-1,
-        merge_tolerance=1e-4
+        merge_tolerance=1e-4,
+        cell_tallies=None,
+        mesh_tallies_2D=None,
+        source=None
     ):
 
         self.reactor = reactor
         self.materials = materials
         self.cell_tallies = cell_tallies
-        self.ion_density_origin = ion_density_origin
-        self.ion_density_peaking_factor = ion_density_peaking_factor
-        self.ion_density_pedestal = ion_density_pedestal
-        self.ion_density_separatrix = ion_density_separatrix
-        self.ion_temperature_origin = ion_temperature_origin
-        self.ion_temperature_peaking_factor = ion_temperature_peaking_factor
-        self.ion_temperature_pedestal = ion_temperature_pedestal
-        self.ion_temperature_separatrix = ion_temperature_separatrix
-        self.pedestal_radius_factor = pedestal_radius_factor
-        self.shafranov_shift = shafranov_shift
-        self.ion_temperature_beta = ion_temperature_beta
-        self.method = 'ppp'
+        self.mesh_tallies_2D = mesh_tallies_2D
+        self.method = method
         self.simulation_batches = simulation_batches
         self.simulation_particles_per_batch = simulation_particles_per_batch
         self.max_lost_particles = max_lost_particles
         self.faceting_tolerance = faceting_tolerance
         self.merge_tolerance = merge_tolerance
+        self.source = source
+        self.fusion_power = fusion_power
 
         self.model = None
-        self.fusion_power = fusion_power
 
         # Only 360 degree models are supported for now as reflecting surfaces
         # are needed for sector models and they are not currently supported
@@ -130,6 +116,14 @@ class NeutronicsModelFromReactor():
             print('remaking reactor as it was not set to 360 degrees')
             reactor.solid
             # TODO make use of reactor.create_solids() here
+
+    @property
+    def source(self):
+        return self._source
+
+    @source.setter
+    def source(self, value):
+        self._source = value
 
     @property
     def faceting_tolerance(self):
@@ -169,18 +163,19 @@ class NeutronicsModelFromReactor():
 
     @cell_tallies.setter
     def cell_tallies(self, value):
-        if not isinstance(value, list):
-            raise ValueError(
-                "NeutronicsModelFromReactor.cell_tallies should be a\
-                list")
-        output_options = ['TBR', 'heat', 'flux', 'fast flux', 'dose']
-        for entry in value:
-            if entry not in output_options:
+        if value is not None:
+            if not isinstance(value, list):
                 raise ValueError(
-                    "NeutronicsModelFromReactor.cell_tallies argument",
-                    entry,
-                    "not allowed, the following options are supported",
-                    output_options)
+                    "NeutronicsModelFromReactor.cell_tallies should be a\
+                    list")
+            output_options = ['TBR', 'heat', 'flux', 'fast flux', 'dose']
+            for entry in value:
+                if entry not in output_options:
+                    raise ValueError(
+                        "NeutronicsModelFromReactor.cell_tallies argument",
+                        entry,
+                        "not allowed, the following options are supported",
+                        output_options)
         self._cell_tallies = value
 
     @property
@@ -260,40 +255,6 @@ class NeutronicsModelFromReactor():
         self.mats = openmc.Materials(list(self.openmc_materials.values()))
 
         return self.mats
-
-    def create_plasma_source(self):
-        """Uses the parametric-plasma-source to create a ditributed neutron
-        source for use in the simulation"""
-
-        self.pedestal_radius = self.pedestal_radius_factor * \
-            (self.reactor.minor_radius / 100)
-
-        my_plasma = PlasmaSource(
-            elongation=self.reactor.elongation,
-            ion_density_origin=self.ion_density_origin,
-            ion_density_peaking_factor=self.ion_density_peaking_factor,
-            ion_density_pedestal=self.ion_density_pedestal,
-            ion_density_separatrix=self.ion_density_separatrix,
-            ion_temperature_origin=self.ion_temperature_origin,
-            ion_temperature_peaking_factor=self.ion_temperature_peaking_factor,
-            ion_temperature_pedestal=self.ion_temperature_pedestal,
-            ion_temperature_separatrix=self.ion_temperature_separatrix,
-            major_radius=self.reactor.major_radius / 100,
-            minor_radius=self.reactor.minor_radius / 100,
-            pedestal_radius=self.pedestal_radius,
-            plasma_id=1,
-            shafranov_shift=self.shafranov_shift,
-            triangularity=self.reactor.triangularity,
-            ion_temperature_beta=self.ion_temperature_beta,
-        )
-
-        source = openmc.Source()
-        source.library = SOURCE_SAMPLING_PATH
-        source.parameters = str(my_plasma)
-
-        self.source = source
-
-        return source
 
     def create_neutronics_geometry(self, method=None):
         """Produces a dagmc.h5m neutronics file compatable with DAGMC
@@ -387,8 +348,8 @@ class NeutronicsModelFromReactor():
         """
 
         self.create_materials()
-        self.create_plasma_source()
         self.create_neutronics_geometry(method=method)
+        self.create_tallies()
 
         # this is the underlying geometry container that is filled with the
         # faceteted DGAMC CAD model
@@ -406,37 +367,57 @@ class NeutronicsModelFromReactor():
         settings.source = self.source
         settings.max_lost_particles = self.max_lost_particles
 
+        # make the model from gemonetry, materials, settings and tallies
+        self.model = openmc.model.Model(geom, self.mats, settings, self.tallies)
+
+    def create_tallies(self):
         # details about what neutrons interactions to keep track of (tally)
         tallies = openmc.Tallies()
 
-        if 'TBR' in self.cell_tallies:
-            blanket_mat = self.openmc_materials['blanket_mat']
-            material_filter = openmc.MaterialFilter(blanket_mat)
-            tally = openmc.Tally(name="TBR")
-            tally.filters = [material_filter]
-            tally.scores = ["(n,Xt)"]  # where X is a wild card
-            tallies.append(tally)
+        if self.mesh_tallies_2D is not None:
+            # Create mesh which will be used for tally
+            mesh = openmc.RegularMesh()
+            mesh_height = 100
+            mesh_width = mesh_height
+            mesh.dimension = [mesh_width, mesh_height]
+            mesh.lower_left = [0, -1200, -1200]  # hard coded for now
+            mesh.upper_right = [0, 1200, 1200]  # should be obtained from the geometry
 
-        if 'heat' in self.cell_tallies:
-            for key, value in self.openmc_materials.items():
-                if key != 'DT_plasma':
-                    material_filter = openmc.MaterialFilter(value)
-                    tally = openmc.Tally(name=key + "_heat")
-                    tally.filters = [material_filter]
-                    tally.scores = ["heating"]
-                    tallies.append(tally)
+            if 'tritium_production' in self.mesh_tallies_2D:
+                mesh_filter = openmc.MeshFilter(mesh)
+                mesh_tally = openmc.Tally(name='tritium_production_on_2D_mesh')
+                mesh_tally.filters = [mesh_filter]
+                mesh_tally.scores = ["(n,Xt)"]
+                tallies.append(mesh_tally)
 
-        if 'flux' in self.cell_tallies:
-            for key, value in self.openmc_materials.items():
-                if key != 'DT_plasma':
-                    material_filter = openmc.MaterialFilter(value)
-                    tally = openmc.Tally(name=key + "_flux")
-                    tally.filters = [material_filter]
-                    tally.scores = ["flux"]
-                    tallies.append(tally)
+        if self.cell_tallies is not None:
+            if 'TBR' in self.cell_tallies:
+                blanket_mat = self.openmc_materials['blanket_mat']
+                material_filter = openmc.MaterialFilter(blanket_mat)
+                tally = openmc.Tally(name="TBR")
+                tally.filters = [material_filter]
+                tally.scores = ["(n,Xt)"]  # where X is a wild card
+                tallies.append(tally)
 
-        # make the model from gemonetry, materials, settings and tallies
-        self.model = openmc.model.Model(geom, self.mats, settings, tallies)
+            if 'heat' in self.cell_tallies:
+                for key, value in self.openmc_materials.items():
+                    if key != 'DT_plasma':
+                        material_filter = openmc.MaterialFilter(value)
+                        tally = openmc.Tally(name=key + "_heat")
+                        tally.filters = [material_filter]
+                        tally.scores = ["heating"]
+                        tallies.append(tally)
+
+            if 'flux' in self.cell_tallies:
+                for key, value in self.openmc_materials.items():
+                    if key != 'DT_plasma':
+                        material_filter = openmc.MaterialFilter(value)
+                        tally = openmc.Tally(name=key + "_flux")
+                        tally.filters = [material_filter]
+                        tally.scores = ["flux"]
+                        tallies.append(tally)
+
+        self.tallies = tallies
 
     def simulate(self, verbose=True, method=None):
         """Run the OpenMC simulation. Deletes exisiting simulation output
