@@ -2,7 +2,8 @@
 for a parametric ball reactor"""
 
 import paramak
-
+from parametric_plasma_source import PlasmaSource, SOURCE_SAMPLING_PATH
+import openmc
 
 def make_model_and_simulate():
     """Makes a neutronics Reactor model and simulates the TBR"""
@@ -25,9 +26,32 @@ def make_model_and_simulate():
         rotation_angle=360,
     )
 
+    my_plasma = PlasmaSource(
+        elongation=1.557,
+        ion_density_origin=1.09e20,
+        ion_density_peaking_factor=1,
+        ion_density_pedestal=1.09e20,
+        ion_density_separatrix=3e19,
+        ion_temperature_origin=45.9,
+        ion_temperature_peaking_factor=8.06,
+        ion_temperature_pedestal=6.09,
+        ion_temperature_separatrix=0.1,
+        major_radius=my_reactor.major_radius,
+        minor_radius=my_reactor.minor_radius,
+        pedestal_radius=0.8 * my_reactor.major_radius,
+        plasma_id=1,
+        shafranov_shift=0.44789,
+        triangularity=0.270,
+        ion_temperature_beta=6,
+    )
+    source = openmc.Source()
+    source.library = SOURCE_SAMPLING_PATH
+    source.parameters = str(my_plasma)
+
     # makes the neutronics model from the geometry and material allocations
     neutronics_model = paramak.NeutronicsModelFromReactor(
         reactor=my_reactor,
+        source=source,
         materials={
             'inboard_tf_coils_mat': 'eurofer',
             'center_column_shield_mat': 'eurofer',
